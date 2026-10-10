@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Chord & BPM Analyzer</title>
+    <style>
+        body { font-family: sans-serif; background: #1e1e1e; color: #fff; padding: 20px; display: flex; justify-content: center; }
+        .box { background: #252526; padding: 25px; border-radius: 8px; width: 100%; max-width: 700px; text-align: center; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 5px; box-sizing: border-box; }
+        input[type="file"] { background: #333; border: 1px dashed #555; color: #ccc; cursor: pointer; }
+        button { background: #ff8c00; color: #fff; border: none; font-weight: bold; cursor: pointer; font-size: 15px; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        .nav-link { color: #569cd6; text-decoration: none; display: block; margin-bottom: 20px; text-align: left; }
+        
+        audio { width: 100%; margin: 15px 0; border-radius: 4px; display: none; }
+        
+        #progress { width: 100%; background: #444; border-radius: 4px; display: none; margin-top: 10px; overflow: hidden; height: 10px; }
+        #progressBar { width: 0%; height: 100%; background: #ce9178; transition: width 0.2s; }
+        
+        .bpm-display { font-size: 20px; font-weight: bold; color: #4ec9b0; margin-bottom: 20px; border-bottom: 1px dashed #444; padding-bottom: 15px;}
+        .result-area { display: none; background: #1a1a1a; border: 1px solid #444; border-radius: 6px; padding: 20px; margin-top: 20px; max-height: 400px; overflow-y: auto; }
+        
+        /* Grid Chord diperbarui agar blok bisa memanjang */
+        .chord-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: stretch; }
+        
+        .chord-block { 
+            background: #2d2d2d; 
+            border: 1px solid #444; 
+            border-radius: 6px; 
+            padding: 10px 15px; 
+            text-align: center; 
+            cursor: pointer; 
+            transition: 0.2s; 
+            user-select: none;
+            flex-grow: 1; /* Biarkan blok memanjang jika punya ruang */
+            min-width: 60px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .chord-block:hover { border-color: #569cd6; background: #333; transform: translateY(-3px); }
+        .chord-block.active { background: #007acc; border-color: #569cd6; box-shadow: 0 0 10px rgba(0, 122, 204, 0.6); transform: scale(1.05); }
+        
+        /* Desain teks waktu dibuat rentang (misal 0:14 - 0:16) */
+        .chord-time { font-size: 10px; color: #aaa; margin-bottom: 4px; }
+        .chord-name { font-size: 20px; font-weight: bold; color: #fff; }
+        .chord-block.active .chord-time { color: #e0e0e0; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <a href="../index.html" class="nav-link">← Kembali ke Menu</a>
+        <h2 style="color: #ce9178;">🎹 Interactive Chord & BPM</h2>
+        <p style="font-size: 12px; color: #888;">(Smart Chunking: Chord yang sama digabung jadi 1 blok)</p>
+        
+        <input type="file" id="audioFile" accept="audio/*">
+        <audio id="audioPlayer" controls></audio>
+        <button id="processBtn" disabled>Scan Audio Lokal</button>
+        
+        <div id="progress"><div id="progressBar"></div></div>
+        <p id="status" style="color: #4ec9b0; font-size: 13px;"></p>
+        
+        <div id="resultArea" class="result-area"></div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('audioFile');
+        const audioPlayer = document.getElementById('audioPlayer');
+        const processBtn = document.getElementById('processBtn');
+        const status = document.getElementById('status');
+        const progress = document.getElementById('progress');
+        const progressBar = document.getElementById('progressBar');
+        const resultArea = document.getElementById('resultArea');
+
+        const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        const baseFreqs = [261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88];
+
+        function detectBPM(data, sampleRate) {
+            let maxVol = 0;
+            for (let i = 0; i < data.length; i++) if (Math.abs(data[i]) > maxVol) maxVol = Math.abs(data[i]);
+            const threshold = maxVol * 0.85; 
+            let peaks = [];
+            for (let i = 0; i < data.length; i++) {
+                if (Math.abs(data[i]) > threshold) {
+                    peaks.push(i);
+                    i += Math.floor(sampleRate / 4);
+                }
+            }
+            if (peaks.length < 2) return 120;
+            let intervals = {};
+            for (let i = 1; i < peaks.length; i++) {
+                let bpm = Math.round(60 / ((peaks[i] - peaks[i-1]) / sampleRate));
+                if (bpm >= 60 && bpm <= 200) intervals[bpm] = (intervals[bpm] || 0) + 1;
+            }
+            let bestBPM = 120, maxCount = 0;
+            for (let bpm in intervals) {
+                if (intervals[bpm] > maxCount) { maxCount = intervals[bpm]; bestBPM = parseInt(bpm); }
+            }
+            return bestBPM;
+        }
+
+        function goertzel(buffer, freq, sampleRate) {
+            const k = Math.floor(0.5 + (buffer.length * freq) / sampleRate);
+            const omega = (2.0 * Math.PI * k) / buffer.length;
+            const cosine = Math.cos(omega);
+            const coeff = 2.0 * cosine;
+            let q0 = 0, q1 = 0, q2 = 0;
+            for (let i = 0; i < buffer.length; i++) {
+                q0 = coeff * q1 - q2 + buffer[i];
+                q2 = q1; q1 = q0;
+            }
+            const real = (q1 - q2 * cosine), imag = (q2 * Math.sin(omega));
+            return Math.sqrt(real * real + imag * imag);
+        }
+
+        function detectChord(chromagram) {
+            let bestChord = "-", maxScore = 0;
+            for (let i = 0; i < 12; i++) {
+                const root = i, thirdMaj = (i + 4) % 12, thirdMin = (i + 3) % 12, fifth = (i + 7) % 12;
+                const majScore = chromagram[root] + chromagram[thirdMaj] + chromagram[fifth];
+                if (majScore > maxScore) { maxScore = majScore; bestChord = noteNames[root]; } 
+                const minScore = chromagram[root] + chromagram[thirdMin] + chromagram[fifth];
+                if (minScore > maxScore) { maxScore = minScore; bestChord = noteNames[root] + "m"; }
+            }
+            return bestChord;
+        }
+
+        // Format waktu ke MM:SS
+        function formatTime(timeSec) {
+            const min = Math.floor(timeSec / 60).toString().padStart(2, '0');
+            const sec = Math.floor(timeSec % 60).toString().padStart(2, '0');
+            return `${min}:${sec}`;
+        }
+
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files[0];
+            if (file) {
+                processBtn.disabled = false;
+                resultArea.style.display = 'none';
+                status.innerText = "";
+                audioPlayer.src = URL.createObjectURL(file);
+                audioPlayer.style.display = 'block';
+            }
+        });
+
+        let chordBlockElements = [];
+
+        processBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            processBtn.disabled = true;
+            progress.style.display = 'block';
+            status.innerText = "Menganalisis Audio...";
+            chordBlockElements = [];
+            
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const arrayBuffer = await file.arrayBuffer();
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                const channelData = audioBuffer.getChannelData(0);
+                const sampleRate = audioBuffer.sampleRate;
+
+                const estimatedBPM = detectBPM(channelData, sampleRate);
+                const beatDurationSec = 60 / estimatedBPM; 
+                const chunkSize = Math.floor(sampleRate * beatDurationSec); 
+                
+                let outputHTML = `<div class="bpm-display">⏱️ Deteksi BPM: ${estimatedBPM}</div>`;
+                outputHTML += `<div class="chord-grid" id="chordGrid">`;
+                
+                // --- LOGIKA BARU: PENGGABUNGAN CHORD (SMART CHUNKING) ---
+                let currentChord = null;
+                let currentStartTime = 0;
+                let currentEndTime = 0;
+                
+                // Fungsi pembantu untuk mencetak 1 blok HTML
+                const renderBlock = (chord, start, end) => {
+                    // Lebar blok fleksibel: makin lama durasinya, makin lebar (max 150px)
+                    const duration = end - start;
+                    const flexGrow = Math.max(1, Math.min(3, Math.round(duration / beatDurationSec))); 
+                    
+                    return `
+                        <div class="chord-block" data-start="${start}" data-end="${end}" style="flex-grow: ${flexGrow};">
+                            <div class="chord-time">${formatTime(start)}</div>
+                            <div class="chord-name">${chord}</div>
+                        </div>
+                    `;
+                };
+
+                for (let i = 0; i < channelData.length; i += chunkSize) {
+                    const chunk = channelData.slice(i, i + chunkSize);
+                    if (chunk.length < chunkSize * 0.5) break; 
+
+                    let chromagram = new Array(12).fill(0);
+                    for (let octave = 3; octave <= 4; octave++) {
+                        for (let n = 0; n < 12; n++) {
+                            const targetFreq = baseFreqs[n] * Math.pow(2, octave - 4);
+                            chromagram[n] += goertzel(chunk, targetFreq, sampleRate);
+                        }
+                    }
+
+                    const totalEnergy = chromagram.reduce((a, b) => a + b, 0);
+                    let chordGuess = totalEnergy > (40 * beatDurationSec) ? detectChord(chromagram) : "..."; 
+                    
+                    const timeSec = i / sampleRate;
+
+                    // Logika Penggabungan:
+                    if (currentChord === null) {
+                        // Inisiasi chord pertama kali
+                        currentChord = chordGuess;
+                        currentStartTime = timeSec;
+                        currentEndTime = timeSec + beatDurationSec;
+                    } else if (chordGuess === currentChord) {
+                        // Jika chordnya MASIH SAMA, panjangkan waktu akhirnya (jangan cetak blok baru)
+                        currentEndTime = timeSec + beatDurationSec;
+                    } else {
+                        // Jika chordnya BERUBAH, cetak blok chord yang lama, lalu mulai catat chord yang baru
+                        outputHTML += renderBlock(currentChord, currentStartTime, currentEndTime);
+                        
+                        currentChord = chordGuess;
+                        currentStartTime = timeSec;
+                        currentEndTime = timeSec + beatDurationSec;
+                    }
+
+                    if (i % (chunkSize * 10) === 0) {
+                        progressBar.style.width = Math.round((i / channelData.length) * 100) + '%';
+                        await new Promise(r => setTimeout(r, 1));
+                    }
+                }
+                
+                // Jangan lupa cetak blok chord yang paling terakhir (saat lagu habis)
+                if (currentChord !== null) {
+                    outputHTML += renderBlock(currentChord, currentStartTime, currentEndTime);
+                }
+
+                outputHTML += `</div>`;
+                progressBar.style.width = '100%';
+                status.innerText = "Selesai! Putar audio untuk melihat sinkronisasi.";
+                resultArea.innerHTML = outputHTML;
+                resultArea.style.display = 'block';
+
+                chordBlockElements = document.querySelectorAll('.chord-block');
+
+                // Klik loncat durasi (Seek)
+                chordBlockElements.forEach(block => {
+                    block.addEventListener('click', () => {
+                        audioPlayer.currentTime = parseFloat(block.getAttribute('data-start'));
+                        audioPlayer.play();
+                    });
+                });
+
+            } catch(e) {
+                console.error(e);
+                status.innerText = "Gagal memproses file audio.";
+                status.style.color = "red";
+            } finally {
+                processBtn.disabled = false;
+            }
+        });
+
+        // --- SISTEM SYNC LIVE PLAYBACK (Rentang Waktu Start-End) ---
+        audioPlayer.addEventListener('timeupdate', () => {
+            if (chordBlockElements.length === 0) return;
+            const currentTime = audioPlayer.currentTime;
+            
+            chordBlockElements.forEach((block) => {
+                const startTime = parseFloat(block.getAttribute('data-start'));
+                const endTime = parseFloat(block.getAttribute('data-end'));
+                
+                // Cek apakah waktu pemutaran sekarang berada di DALAM rentang blok chord ini
+                if (currentTime >= startTime && currentTime < endTime) {
+                    if (!block.classList.contains('active')) {
+                        block.classList.add('active');
+                        block.scrollIntoView({ behavior: "smooth", block: "center" });
+                    }
+                } else {
+                    block.classList.remove('active');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
