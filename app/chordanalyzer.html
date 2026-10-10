@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Interactive Chord & BPM Analyzer</title>
     <style>
-        body { font-family: sans-serif; background: #1e1e1e; color: #fff; padding: 20px; display: flex; justify-content: center; }
-        .box { background: #252526; padding: 25px; border-radius: 8px; width: 100%; max-width: 700px; text-align: center; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        body { font-family: sans-serif; background: #1e1e1e; color: #fff; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        .box { background: #252526; padding: 25px; border-radius: 8px; width: 100%; max-width: 700px; text-align: center; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); margin-bottom: 20px;}
         input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 5px; box-sizing: border-box; }
         input[type="file"] { background: #333; border: 1px dashed #555; color: #ccc; cursor: pointer; }
-        button { background: #ff8c00; color: #fff; border: none; font-weight: bold; cursor: pointer; font-size: 15px; }
-        button:disabled { background: #555; cursor: not-allowed; }
+        button { background: #ff8c00; color: #fff; border: none; font-weight: bold; cursor: pointer; font-size: 15px; transition: 0.3s; }
+        button:disabled { background: #444; color: #777; cursor: not-allowed; }
         .nav-link { color: #569cd6; text-decoration: none; display: block; margin-bottom: 20px; text-align: left; }
         
         audio { width: 100%; margin: 15px 0; border-radius: 4px; display: none; }
@@ -19,30 +19,18 @@
         #progressBar { width: 0%; height: 100%; background: #ce9178; transition: width 0.2s; }
         
         .bpm-display { font-size: 20px; font-weight: bold; color: #4ec9b0; margin-bottom: 20px; border-bottom: 1px dashed #444; padding-bottom: 15px;}
+        
         .result-area { display: none; background: #1a1a1a; border: 1px solid #444; border-radius: 6px; padding: 20px; margin-top: 20px; max-height: 400px; overflow-y: auto; }
         
-        /* Grid Chord diperbarui agar blok bisa memanjang */
+        .history-area { display: none; background: #222; border: 1px dashed #555; border-radius: 6px; padding: 20px; text-align: left; opacity: 0.9;}
+        .history-title { font-size: 14px; color: #9cdcfe; margin-bottom: 10px; border-bottom: 1px solid #444; padding-bottom: 5px;}
+        .history-content { max-height: 300px; overflow-y: auto; }
+
         .chord-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; align-items: stretch; }
-        
-        .chord-block { 
-            background: #2d2d2d; 
-            border: 1px solid #444; 
-            border-radius: 6px; 
-            padding: 10px 15px; 
-            text-align: center; 
-            cursor: pointer; 
-            transition: 0.2s; 
-            user-select: none;
-            flex-grow: 1; /* Biarkan blok memanjang jika punya ruang */
-            min-width: 60px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
+        .chord-block { background: #2d2d2d; border: 1px solid #444; border-radius: 6px; padding: 10px 15px; text-align: center; cursor: pointer; transition: 0.2s; user-select: none; flex-grow: 1; min-width: 60px; display: flex; flex-direction: column; justify-content: center; }
         .chord-block:hover { border-color: #569cd6; background: #333; transform: translateY(-3px); }
         .chord-block.active { background: #007acc; border-color: #569cd6; box-shadow: 0 0 10px rgba(0, 122, 204, 0.6); transform: scale(1.05); }
         
-        /* Desain teks waktu dibuat rentang (misal 0:14 - 0:16) */
         .chord-time { font-size: 10px; color: #aaa; margin-bottom: 4px; }
         .chord-name { font-size: 20px; font-weight: bold; color: #fff; }
         .chord-block.active .chord-time { color: #e0e0e0; }
@@ -52,10 +40,11 @@
     <div class="box">
         <a href="../index.html" class="nav-link">← Kembali ke Menu</a>
         <h2 style="color: #ce9178;">🎹 Interactive Chord & BPM</h2>
-        <p style="font-size: 12px; color: #888;">(Smart Chunking: Chord yang sama digabung jadi 1 blok)</p>
         
         <input type="file" id="audioFile" accept="audio/*">
+        <!-- PLAYER ATAS (Aktif) -->
         <audio id="audioPlayer" controls></audio>
+        
         <button id="processBtn" disabled>Scan Audio Lokal</button>
         
         <div id="progress"><div id="progressBar"></div></div>
@@ -64,14 +53,27 @@
         <div id="resultArea" class="result-area"></div>
     </div>
 
+    <!-- Kotak History Bawah -->
+    <div class="box history-area" id="historyBox">
+        <div class="history-title">⏳ Hasil Scan Sebelumnya: <span id="historyFileName" style="color:#fff; font-weight:bold;">-</span></div>
+        <!-- PLAYER BAWAH (History) -->
+        <audio id="historyPlayer" controls></audio>
+        <div class="history-content" id="historyArea"></div>
+    </div>
+
     <script>
         const fileInput = document.getElementById('audioFile');
         const audioPlayer = document.getElementById('audioPlayer');
+        const historyPlayer = document.getElementById('historyPlayer');
         const processBtn = document.getElementById('processBtn');
         const status = document.getElementById('status');
         const progress = document.getElementById('progress');
         const progressBar = document.getElementById('progressBar');
+        
         const resultArea = document.getElementById('resultArea');
+        const historyBox = document.getElementById('historyBox');
+        const historyArea = document.getElementById('historyArea');
+        const historyFileName = document.getElementById('historyFileName');
 
         const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
         const baseFreqs = [261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88];
@@ -83,8 +85,7 @@
             let peaks = [];
             for (let i = 0; i < data.length; i++) {
                 if (Math.abs(data[i]) > threshold) {
-                    peaks.push(i);
-                    i += Math.floor(sampleRate / 4);
+                    peaks.push(i); i += Math.floor(sampleRate / 4);
                 }
             }
             if (peaks.length < 2) return 120;
@@ -126,38 +127,76 @@
             return bestChord;
         }
 
-        // Format waktu ke MM:SS
         function formatTime(timeSec) {
             const min = Math.floor(timeSec / 60).toString().padStart(2, '0');
             const sec = Math.floor(timeSec % 60).toString().padStart(2, '0');
             return `${min}:${sec}`;
         }
 
+        let currentFileName = "";
+        let currentBlobUrl = "";
+        let activeAudioFile = null; // Menyimpan file yang benar-benar akan di-scan
+        
+        let chordBlockElements = [];
+        let historyChordBlockElements = []; 
+
+        // KETIKA MENGUPLOAD FILE (Hanya nyalakan tombol, jangan sentuh UI hasil lama)
         fileInput.addEventListener('change', () => {
             const file = fileInput.files[0];
             if (file) {
+                activeAudioFile = file; // Simpan file ke variabel
+                
+                // Cuma nyalakan tombol scan, biarkan hasil lama tetap nampil di layar atas
                 processBtn.disabled = false;
-                resultArea.style.display = 'none';
-                status.innerText = "";
-                audioPlayer.src = URL.createObjectURL(file);
-                audioPlayer.style.display = 'block';
+                processBtn.innerText = "Scan Audio Lokal"; 
+                status.innerText = "File siap di-scan.";
             }
         });
 
-        let chordBlockElements = [];
-
+        // KETIKA TOMBOL SCAN DIKLIK (Di sinilah transfer history dan pembersihan layar terjadi)
         processBtn.addEventListener('click', async () => {
-            const file = fileInput.files[0];
-            if (!file) return;
+            if (!activeAudioFile) return;
 
+            // 1. PINDAHKAN HASIL LAMA KE HISTORY (Jika ada)
+            if (resultArea.innerHTML.trim() !== "") {
+                historyFileName.innerText = currentFileName;
+                historyArea.innerHTML = resultArea.innerHTML;
+                
+                historyPlayer.src = currentBlobUrl;
+                historyPlayer.style.display = 'block';
+                historyBox.style.display = 'block';
+
+                // Pasang ulang fungsi klik di grid history
+                historyChordBlockElements = document.querySelectorAll('#historyArea .chord-block');
+                historyChordBlockElements.forEach(block => {
+                    block.addEventListener('click', () => {
+                        historyPlayer.currentTime = parseFloat(block.getAttribute('data-start'));
+                        historyPlayer.play();
+                        audioPlayer.pause(); 
+                    });
+                });
+            }
+
+            // 2. BERSIHKAN LAYAR ATAS UNTUK SCAN BARU
+            currentFileName = activeAudioFile.name;
+            currentBlobUrl = URL.createObjectURL(activeAudioFile);
+            
+            resultArea.style.display = 'none';
+            resultArea.innerHTML = ""; 
+            
+            audioPlayer.src = currentBlobUrl;
+            audioPlayer.style.display = 'block';
+
+            // Kunci tombol saat memproses
             processBtn.disabled = true;
+            processBtn.innerText = "Scanning... Harap Tunggu";
             progress.style.display = 'block';
             status.innerText = "Menganalisis Audio...";
             chordBlockElements = [];
             
             try {
                 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const arrayBuffer = await file.arrayBuffer();
+                const arrayBuffer = await activeAudioFile.arrayBuffer();
                 const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
                 const channelData = audioBuffer.getChannelData(0);
                 const sampleRate = audioBuffer.sampleRate;
@@ -169,17 +208,13 @@
                 let outputHTML = `<div class="bpm-display">⏱️ Deteksi BPM: ${estimatedBPM}</div>`;
                 outputHTML += `<div class="chord-grid" id="chordGrid">`;
                 
-                // --- LOGIKA BARU: PENGGABUNGAN CHORD (SMART CHUNKING) ---
                 let currentChord = null;
                 let currentStartTime = 0;
                 let currentEndTime = 0;
                 
-                // Fungsi pembantu untuk mencetak 1 blok HTML
                 const renderBlock = (chord, start, end) => {
-                    // Lebar blok fleksibel: makin lama durasinya, makin lebar (max 150px)
                     const duration = end - start;
                     const flexGrow = Math.max(1, Math.min(3, Math.round(duration / beatDurationSec))); 
-                    
                     return `
                         <div class="chord-block" data-start="${start}" data-end="${end}" style="flex-grow: ${flexGrow};">
                             <div class="chord-time">${formatTime(start)}</div>
@@ -205,19 +240,14 @@
                     
                     const timeSec = i / sampleRate;
 
-                    // Logika Penggabungan:
                     if (currentChord === null) {
-                        // Inisiasi chord pertama kali
                         currentChord = chordGuess;
                         currentStartTime = timeSec;
                         currentEndTime = timeSec + beatDurationSec;
                     } else if (chordGuess === currentChord) {
-                        // Jika chordnya MASIH SAMA, panjangkan waktu akhirnya (jangan cetak blok baru)
                         currentEndTime = timeSec + beatDurationSec;
                     } else {
-                        // Jika chordnya BERUBAH, cetak blok chord yang lama, lalu mulai catat chord yang baru
                         outputHTML += renderBlock(currentChord, currentStartTime, currentEndTime);
-                        
                         currentChord = chordGuess;
                         currentStartTime = timeSec;
                         currentEndTime = timeSec + beatDurationSec;
@@ -229,7 +259,6 @@
                     }
                 }
                 
-                // Jangan lupa cetak blok chord yang paling terakhir (saat lagu habis)
                 if (currentChord !== null) {
                     outputHTML += renderBlock(currentChord, currentStartTime, currentEndTime);
                 }
@@ -240,26 +269,29 @@
                 resultArea.innerHTML = outputHTML;
                 resultArea.style.display = 'block';
 
-                chordBlockElements = document.querySelectorAll('.chord-block');
-
-                // Klik loncat durasi (Seek)
+                // Pasang fungsi klik untuk Player Atas
+                chordBlockElements = document.querySelectorAll('#resultArea .chord-block');
                 chordBlockElements.forEach(block => {
                     block.addEventListener('click', () => {
                         audioPlayer.currentTime = parseFloat(block.getAttribute('data-start'));
                         audioPlayer.play();
+                        historyPlayer.pause(); 
                     });
                 });
+
+                processBtn.disabled = true;
+                processBtn.innerText = "Hasil Scan Sudah Aktif";
 
             } catch(e) {
                 console.error(e);
                 status.innerText = "Gagal memproses file audio.";
                 status.style.color = "red";
-            } finally {
                 processBtn.disabled = false;
+                processBtn.innerText = "Coba Scan Ulang";
             }
         });
 
-        // --- SISTEM SYNC LIVE PLAYBACK (Rentang Waktu Start-End) ---
+        // --- SISTEM SYNC LIVE PLAYER ATAS ---
         audioPlayer.addEventListener('timeupdate', () => {
             if (chordBlockElements.length === 0) return;
             const currentTime = audioPlayer.currentTime;
@@ -268,7 +300,26 @@
                 const startTime = parseFloat(block.getAttribute('data-start'));
                 const endTime = parseFloat(block.getAttribute('data-end'));
                 
-                // Cek apakah waktu pemutaran sekarang berada di DALAM rentang blok chord ini
+                if (currentTime >= startTime && currentTime < endTime) {
+                    if (!block.classList.contains('active')) {
+                        block.classList.add('active');
+                        block.scrollIntoView({ behavior: "smooth", block: "center" });
+                    }
+                } else {
+                    block.classList.remove('active');
+                }
+            });
+        });
+
+        // --- SISTEM SYNC LIVE PLAYER BAWAH (HISTORY) ---
+        historyPlayer.addEventListener('timeupdate', () => {
+            if (historyChordBlockElements.length === 0) return;
+            const currentTime = historyPlayer.currentTime;
+            
+            historyChordBlockElements.forEach((block) => {
+                const startTime = parseFloat(block.getAttribute('data-start'));
+                const endTime = parseFloat(block.getAttribute('data-end'));
+                
                 if (currentTime >= startTime && currentTime < endTime) {
                     if (!block.classList.contains('active')) {
                         block.classList.add('active');
