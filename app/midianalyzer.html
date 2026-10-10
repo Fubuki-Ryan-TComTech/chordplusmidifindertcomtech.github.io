@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real MIDI Analyzer</title>
+    <!-- Ganti ke unpkg agar lolos dari blokir Microsoft Edge -->
+    <script src="https://unpkg.com/midi-writer-js@2.1.4/build/browser.min.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #1e1e1e; color: #fff; padding: 20px; display: flex; justify-content: center; }
+        .box { background: #252526; padding: 25px; border-radius: 8px; width: 100%; max-width: 500px; text-align: center; border: 1px solid #333; }
+        input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 5px; box-sizing: border-box; }
+        input[type="file"] { background: #333; border: 1px dashed #555; }
+        button { background: #4CAF50; color: #fff; border: none; font-weight: bold; cursor: pointer; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        .nav-link { color: #569cd6; text-decoration: none; display: block; margin-bottom: 20px; text-align: left; }
+        
+        .btn-download { display: none; background: #007acc; text-decoration: none; font-weight: bold; margin-top: 15px;}
+        .btn-download:hover { background: #005f9e; }
+        #progress { width: 100%; background: #444; border-radius: 4px; display: none; margin-top: 10px; overflow: hidden; height: 10px; }
+        #progressBar { width: 0%; height: 100%; background: #4ec9b0; transition: width 0.2s; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <a href="../index.html" class="nav-link">← Kembali ke Menu</a>
+        <h2 style="color: #4ec9b0;">🎼 Real MIDI Analyzer</h2>
+        <p style="font-size: 12px; color: #888;">Pitch-tracking menggunakan algoritma Autokorelasi (100% Offline Lokal).</p>
+        
+        <input type="file" id="audioFile" accept="audio/*">
+        <button id="processBtn" disabled>Scan Audio & Generate MIDI</button>
+        
+        <div id="progress"><div id="progressBar"></div></div>
+        <p id="status" style="color: #dcdcaa; font-size: 13px;"></p>
+        
+        <a href="#" id="downloadLink" download="FLibuki_Extracted.mid" class="btn-download">
+            <button style="background: inherit; pointer-events: none; margin: 0; padding: 0;">⬇️ Download File .mid</button>
+        </a>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('audioFile');
+        const processBtn = document.getElementById('processBtn');
+        const status = document.getElementById('status');
+        const downloadLink = document.getElementById('downloadLink');
+        const progress = document.getElementById('progress');
+        const progressBar = document.getElementById('progressBar');
+
+        function hzToMidi(hz) { return Math.round(12 * (Math.log2(hz / 440)) + 69); }
+
+        function autoCorrelate(buffer, sampleRate) {
+            let SIZE = buffer.length;
+            let sumOfSquares = 0;
+            for (let i = 0; i < SIZE; i++) sumOfSquares += buffer[i] * buffer[i];
+            if (Math.sqrt(sumOfSquares / SIZE) < 0.01) return -1; // Abaikan jika terlalu pelan
+
+            let r1 = 0, r2 = SIZE - 1, thres = 0.2;
+            for (let i = 0; i < SIZE / 2; i++) if (Math.abs(buffer[i]) < thres) { r1 = i; break; }
+            for (let i = 1; i < SIZE / 2; i++) if (Math.abs(buffer[SIZE - i]) < thres) { r2 = SIZE - i; break; }
+
+            buffer = buffer.slice(r1, r2);
+            SIZE = buffer.length;
+
+            let c = new Array(SIZE).fill(0);
+            for (let i = 0; i < SIZE; i++) {
+                for (let j = 0; j < SIZE - i; j++) c[i] = c[i] + buffer[j] * buffer[j + i];
+            }
+
+            let d = 0; while (c[d] > c[d + 1]) d++;
+            let maxval = -1, maxpos = -1;
+            for (let i = d; i < SIZE; i++) {
+                if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
+            }
+            return sampleRate / maxpos;
+        }
+
+        fileInput.addEventListener('change', () => {
+            processBtn.disabled = !fileInput.files.length;
+            downloadLink.style.display = 'none';
+            status.innerText = "";
+        });
+
+        processBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            processBtn.disabled = true;
+            downloadLink.style.display = 'none';
+            progress.style.display = 'block';
+            status.innerText = "Membaca file audio...";
+
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const arrayBuffer = await file.arrayBuffer();
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                const channelData = audioBuffer.getChannelData(0);
+                const sampleRate = audioBuffer.sampleRate;
+
+                status.innerText = "Scanning frekuensi (DSP Autokorelasi)...";
+                const track = new MidiWriter.Track();
+                track.addEvent(new MidiWriter.ProgramChangeEvent({instrument: 1}));
+
+                const chunkSize = Math.floor(sampleRate * 0.25); // Scan setiap 1/4 detik
+                let previousNote = -1;
+
+                for (let i = 0; i < channelData.length; i += chunkSize) {
+                    const chunk = channelData.slice(i, i + chunkSize);
+                    const freq = autoCorrelate(chunk, sampleRate);
+                    
+                    if (freq !== -1) {
+                        const midiNote = hzToMidi(freq);
+                        if (midiNote >= 36 && midiNote <= 84) {
+                            track.addEvent(new MidiWriter.NoteEvent({pitch: [midiNote], duration: '8'}));
+                            previousNote = midiNote;
+                        }
+                    } else if (previousNote !== -1) {
+                        track.addEvent(new MidiWriter.NoteEvent({pitch: ['rest'], duration: '8'}));
+                        previousNote = -1;
+                    }
+
+                    if (i % (chunkSize * 10) === 0) {
+                        progressBar.style.width = Math.round((i / channelData.length) * 100) + '%';
+                        await new Promise(r => setTimeout(r, 1)); // Cegah browser freeze
+                    }
+                }
+
+                progressBar.style.width = '100%';
+                
+                const write = new MidiWriter.Writer(track);
+                downloadLink.href = write.dataUri();
+                downloadLink.download = file.name.replace(/\.[^/.]+$/, "") + "_melodi.mid";
+                downloadLink.style.display = 'block';
+                status.innerText = "Selesai! Melodi berhasil diekstrak menjadi MIDI.";
+                
+            } catch (error) {
+                console.error(error);
+                status.innerText = "Gagal memproses file audio.";
+                status.style.color = "red";
+            } finally {
+                processBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
